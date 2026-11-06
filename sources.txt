@@ -1,0 +1,5 @@
+# RSS · Atom 피드. 한 줄에 "URL 이름". Discord `add-source`가 여기에 덧붙인다.
+https://news.hada.io/rss/news GeekNews
+https://simonwillison.net/atom/everything/ Simon Willison
+https://openai.com/news/rss.xml OpenAI News
+https://blog.google/technology/ai/rss/ Google AI Blog

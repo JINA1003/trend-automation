@@ -1,0 +1,8 @@
+.env
+state/
+__pycache__/
+claude.log
+# 대화 봇이 고치는 개인 메모 · 요청 대기열 (견본은 templates/)
+/direction.md
+/insight_direction.md
+/requests.md

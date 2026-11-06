@@ -1,0 +1,153 @@
+/* 주간 보고서 — 도감(field guide) 도판. 방향: ../.impeccable/surfaces/02-report-css.md */
+:root {
+  --paper: #F1F3EE; --sheet: #FBFCF9; --ink: #1D241F; --ink-2: #3E4A42; --ink-3: #5E6A61;
+  --rule: #CBD2CA; --tag: #E9C64B; --tag-ink: #1D241F; --link: #1F5E7A;
+  --code-bg: #E6EAE3;
+  --sans: "Pretendard Variable", "Pretendard", "Noto Sans KR", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "D2Coding", Menlo, Consolas, monospace;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #151916; --sheet: #1B201C; --ink: #EEF1EC; --ink-2: #C9D1C8; --ink-3: #9AA59C;
+    --rule: #333C35; --link: #8CC4DB; --code-bg: #232A25;
+  }
+}
+
+* { box-sizing: border-box; }
+html { background: var(--paper); scrollbar-color: var(--ink-3) var(--paper); }
+body {
+  margin: 0; color: var(--ink); font: 400 17px/1.8 var(--sans);
+  word-break: keep-all; overflow-wrap: anywhere; text-align: left;
+  -webkit-font-smoothing: antialiased; caret-color: var(--tag);
+}
+::selection { background: var(--tag); color: var(--tag-ink); }
+a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: .22em; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; border-radius: 2px; }
+h1, h2, h3 { text-wrap: balance; }
+p, li { text-wrap: pretty; }
+code { font: 500 .88em/1.5 var(--mono); }
+strong { font-weight: 700; }
+
+/* 표제 — 도감의 속표지 */
+.mast { max-width: 76rem; margin: 0 auto; padding: 4.5rem 2rem 3rem; }
+.mast h1 { font-size: clamp(2.4rem, 5vw, 4rem); line-height: 1.1; letter-spacing: -0.035em; font-weight: 800; margin: 0 0 .6rem; }
+.dateline { margin: 0 0 1.8rem; font-weight: 700; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.lede { font-size: 1.22rem; line-height: 1.7; color: var(--ink-2); max-width: 44rem; margin: 0 0 3rem; }
+
+/* 도판 목록 */
+.index { list-style: none; margin: 0; padding: .3rem 0 0; border-top: 1.5px solid var(--ink); max-width: 56rem; }
+.index a { display: grid; grid-template-columns: 2.6rem minmax(0, 1.5fr) minmax(0, 1fr); gap: 1rem; align-items: baseline;
+  padding: .85rem .25rem; border-bottom: 1px solid var(--rule); color: inherit; text-decoration: none; }
+.index a:hover .nm { text-decoration: underline; text-underline-offset: .22em; }
+.index .nm { font-weight: 700; }
+.index .ol { color: var(--ink-3); font-size: .95rem; }
+.index .when { margin-left: .6em; font-variant-numeric: tabular-nums; color: var(--ink-2); font-weight: 700; }
+.rail .when { font-weight: 700; color: var(--ink); }
+
+/* 도판 번호표 — 노란 표지는 여기와 식별 포인트에만 쓴다 */
+.tag { display: inline-grid; place-items: center; min-width: 1.9rem; height: 1.9rem; padding: 0 .4rem;
+  background: var(--tag); color: var(--tag-ink); font: 800 .95rem/1 var(--sans); font-variant-numeric: tabular-nums; border-radius: 2px; }
+
+/* 도판 */
+main { max-width: 76rem; margin: 0 auto; padding: 0 2rem; }
+.plate { padding: 4.5rem 0 3.5rem; border-top: 1.5px solid var(--ink); scroll-margin-top: 1rem; }
+.plate > header { display: flex; align-items: center; gap: 1rem; margin-bottom: 2rem; }
+.plate h2 { font-size: clamp(1.6rem, 2.8vw, 2.2rem); line-height: 1.25; letter-spacing: -0.02em; font-weight: 800; margin: 0; }
+.cols { display: grid; grid-template-columns: minmax(0, 42rem) minmax(13rem, 17rem); gap: 4rem; }
+.main h3 { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.01em; margin: 2.4rem 0 .5rem; }
+.main p { margin: 0 0 1rem; }
+.summary { font-size: 1.08rem; }
+.summary.external, .summary.opinion { color: var(--ink-3); }
+.prov { font-weight: 700; color: var(--ink); margin-right: .5em; }
+
+/* 표본 사진 */
+.specimen { margin: 0 0 2rem; }
+.specimen img { display: block; width: 100%; height: auto; aspect-ratio: 1200 / 630; object-fit: cover;
+  background: var(--code-bg); border: 1px solid var(--rule); border-radius: 3px; }
+figcaption { font-size: .8rem; color: var(--ink-3); margin-top: .5rem; }
+
+/* 식별 포인트 — 주간 설치 막대 */
+.chart { margin: 1.4rem 0 .4rem; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart .mark { stroke-dasharray: 200; stroke-dashoffset: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .chart:not(.seen) .mark { stroke-dashoffset: 200; }
+  .chart .mark { transition: stroke-dashoffset 900ms cubic-bezier(.16, 1, .3, 1); }
+  .chart:not(.seen) .lab { opacity: 0; }
+  .chart .lab { transition: opacity 500ms 500ms ease-out; }
+}
+
+/* 설치 명령 */
+.cmd { position: relative; }
+pre { margin: 0 0 1rem; padding: 1rem 1.1rem; background: var(--code-bg); border-radius: 4px; overflow-x: auto; }
+pre code { font-size: .9rem; white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; }
+.prompt code { font-family: var(--sans); }
+.cmd pre { padding-right: 5rem; }
+.copy { position: absolute; top: .55rem; right: .55rem; font: 700 .82rem/1 var(--sans); color: var(--ink);
+  background: var(--sheet); border: 1px solid var(--rule); border-radius: 3px; padding: .5rem .7rem; cursor: pointer; }
+.copy:hover { border-color: var(--ink-3); }
+.copy:active { transform: translateY(1px); }
+.prompt { background: transparent; border: 1px dashed var(--rule); }
+
+.steps { margin: 0 0 1rem; padding-left: 1.4rem; }
+.steps li { margin-bottom: .45rem; padding-left: .2rem; }
+.steps li::marker { font-weight: 800; color: var(--ink-3); }
+.caution { margin-top: 1.6rem !important; padding-top: 1rem; border-top: 1px solid var(--rule); color: var(--ink-2); font-size: .95rem; }
+
+/* 다이어그램 */
+.diagram { margin: 1.8rem 0; padding: 1.4rem 1rem; background: var(--sheet); border: 1px solid var(--rule); border-radius: 4px; overflow-x: auto; }
+.diagram pre.mermaid { background: none; margin: 0; padding: 0; text-align: center; font: 500 .85rem/1.5 var(--mono); color: var(--ink-3); }
+.diagram svg { display: block; margin: 0 auto; max-width: none; height: auto; }
+.diagram pre.mermaid:not([data-processed]) { visibility: hidden; }
+.no-mermaid .diagram { display: none; }
+
+/* 여백 난 — 숫자와 출처 */
+.rail { font-size: .88rem; line-height: 1.6; color: var(--ink-2); padding-top: .3rem; }
+.rail > * { margin: 0 0 1.1rem; }
+.rail .cls { font-weight: 800; color: var(--ink); font-size: .95rem; }
+.rail dl { display: grid; grid-template-columns: auto 1fr; gap: .35rem 1rem; padding: .9rem 0; border-block: 1px solid var(--rule); }
+.rail dt { color: var(--ink-3); }
+.rail dd { margin: 0; text-align: right; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+.rail .claim.external, .rail .claim.opinion { display: inline-block; padding: .1rem .5rem; border: 1px solid var(--ink-3); border-radius: 2px; }
+.rail .claim.official { font-weight: 700; color: var(--ink); }
+.rail .vf { color: var(--ink-3); }
+.rail ul { list-style: none; padding: 0; }
+.rail li { margin-bottom: .4rem; }
+.rail a { overflow-wrap: anywhere; }
+
+/* 실무 가이드 */
+.part { padding: 5rem 0 1rem; border-top: 3px solid var(--ink); }
+.part h2 { font-size: clamp(2rem, 3.6vw, 2.8rem); line-height: 1.15; letter-spacing: -0.03em; font-weight: 800; margin: 0 0 .6rem; }
+.part p { margin: 0; color: var(--ink-2); font-size: 1.08rem; }
+.index-part { font-size: 1.3rem; font-weight: 800; margin: 2.4rem 0 .8rem; }
+.plabel { font-weight: 700; margin: 1.4rem 0 .4rem !important; }
+.trouble { margin: 0 0 1rem; }
+.trouble dt { font-weight: 700; margin-top: 1rem; }
+.trouble dd { margin: .2rem 0 0; color: var(--ink-2); }
+.rail .who { display: block; }
+.rail .who dd { text-align: left; font-weight: 400; color: var(--ink-2); margin-bottom: .6rem; }
+
+/* 수집 메모 */
+.memo { max-width: 72rem; margin: 2rem auto 0; padding: 2.5rem 0 5rem; border-top: 1.5px solid var(--ink); color: var(--ink-3); font-size: .88rem; }
+.memo h2 { font-size: 1.6rem; color: var(--ink); margin: 0 0 .8rem; }
+.memo ul { padding-left: 1.1rem; max-width: 52rem; }
+
+@media (max-width: 860px) {
+  body { font-size: 16px; }
+  .mast { padding: 2.6rem 1.25rem 2rem; }
+  main { padding-left: 1.25rem; padding-right: 1.25rem; }
+  .memo { margin-inline: 1.25rem; }
+  .cols { grid-template-columns: minmax(0, 1fr); gap: 1.6rem; }
+  .rail { border-top: 1px solid var(--rule); padding-top: 1.2rem; }
+  .index a { grid-template-columns: 2.4rem 1fr; }
+  .index .ol { grid-column: 2; }
+  .plate { padding-top: 3rem; }
+}
+@media print {
+  .copy { display: none; }
+  .chart .mark { stroke-dashoffset: 0 !important; }
+  .chart .lab { opacity: 1 !important; }
+  .plate { break-before: page; }
+}
