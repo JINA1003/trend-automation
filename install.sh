@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 예약 등록. .env를 채운 뒤 한 번 실행한다. 다시 실행해도 같은 상태가 된다.
+# 예약 등록. .env를 채운 뒤 한 번 실행한다. 다시 실행해도 같은 상태가 된다. WSL과 macOS 공용.
+#  - macOS: 상시 봇 · 정기 작업 모두 launchd LaunchAgent (아래 Darwin 분기)
 #  - 화 · 목 생성/전송: Windows 작업 스케줄러 (WSL이 내려가 있어도 깨워서 돌림, 놓친 실행은 켜지는 대로)
 #  - Discord 대화 · 명령: systemd 상시 서비스 trend-bot (Gateway, 메시지가 오면 바로)
 set -euo pipefail
@@ -18,11 +19,56 @@ if [ ! -d "$PAGES/.git" ]; then
 fi
 [ -s "$PAGES/site.json" ] || echo '{"base_url": "https://jina1003.github.io/ai-briefing"}' > "$PAGES/site.json"
 
-mkdir -p "$HOME/.config/systemd/user"
-# Discord 봇: Gateway(웹소켓)로 메시지를 바로 받는다. 예전 1분 폴링 타이머는 끈다
 VENV="$HOME/.local/share/trend-automation/venv"
 [ -x "$VENV/bin/python" ] || uv venv -q --python 3.12 "$VENV"
 uv pip install -q --python "$VENV/bin/python" "discord.py>=2.4,<3"
+
+if [ "$(uname)" = Darwin ]; then
+  # macOS: 상시 봇과 정기 작업을 launchd LaunchAgent로. 시각은 맥의 로컬 시각(KST)이다.
+  # 잠자는 동안 지난 정기 작업은 깨어나면 한 번 돈다. 봇은 잠자는 동안 답하지 못한다.
+  LA="$HOME/Library/LaunchAgents"; LOGD="$HOME/Library/Logs/trend-automation"; mkdir -p "$LA" "$LOGD"
+  PATHV="$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  agent() {  # agent <이름> <예약 dict 또는 빈 값> <실행할 셸 명령>
+    local label="trend-automation.$1" when="$2" cmd="$3"
+    cat > "$LA/$label.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>-c</string><string>$cmd</string></array>
+  <key>WorkingDirectory</key><string>$HOME/trend-automation</string>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>$PATHV</string></dict>
+  <key>StandardOutPath</key><string>$LOGD/$1.log</string>
+  <key>StandardErrorPath</key><string>$LOGD/$1.log</string>
+  $when
+</dict></plist>
+PLIST
+    plutil -lint -s "$LA/$label.plist"
+    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$LA/$label.plist"
+    echo "registered $label"
+  }
+  at() { local out="" d; for d in $1; do out="$out<dict><key>Weekday</key><integer>$d</integer><key>Hour</key><integer>$2</integer><key>Minute</key><integer>$3</integer></dict>"; done
+         echo "<key>StartCalendarInterval</key><array>$out</array>"; }
+  # 봇: 죽으면 15초 뒤 다시 띄운다(systemd Restart=always · RestartSec=15와 같다)
+  agent bot "<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>15</integer>" \
+    "set -a; . \"\$HOME/.config/trend-automation/.env\"; set +a; exec \"$VENV/bin/python\" bot.py"
+  # Weekday: 1=월 … 5=금, 6=토 (tasks.ps1과 같은 일정)
+  # run.sh를 거치지 않는다: launchd가 띄운 bash는 개인정보 보호(TCC) 때문에 ~/Documents 안의 파일을 못 읽는다.
+  # 문서 폴더 접근을 허용받은 uv python(venv)이 직접 읽고, 그 자식(claude -p)도 같은 허용을 물려받는다.
+  run="set -a; . \"\$HOME/.config/trend-automation/.env\"; set +a; exec \"$VENV/bin/python\" trend.py"
+  agent generate-daily     "$(at '1 2 3 4' 8 0)"  "$run generate daily"
+  agent deliver            "$(at '1 2 3 4' 10 0)" "$run deliver daily"
+  agent generate-daily-fri "$(at 5 7 0)"          "$run generate daily"
+  agent generate-weekly    "$(at 5 8 30)"         "$run generate weekly"
+  agent deliver-weekly     "$(at 5 10 0)"         "$run deliver weekly"
+  agent insight            "$(at 6 9 0)"          "$run insight"
+  echo "등록 완료. 확인: launchctl list | grep trend-automation ; tail $LOGD/bot.log"
+  exit 0
+fi
+
+mkdir -p "$HOME/.config/systemd/user"
+# Discord 봇: Gateway(웹소켓)로 메시지를 바로 받는다. 예전 1분 폴링 타이머는 끈다
 cat > "$HOME/.config/systemd/user/trend-bot.service" <<UNIT
 [Unit]
 Description=trend-automation Discord bot (Gateway)
