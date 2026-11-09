@@ -1,9 +1,9 @@
-"""AI 트렌드 · 스킬 주간 보고 자동화. 화요일 = AI 트렌드 호(trends), 목요일 = 스킬 도감 호(skills),
-금요일 = 팀 공유용 종합 호(weekly, 그 주 화 · 목 호 + 사용자 제보).
+"""AI 트렌드 · 스킬 보고 자동화. 월~금 = 매일 판(daily): 한 주에 판 하나를 두고 매일 새 소식 · 스킬 3~5건을 더한다,
+금요일 = 팀 공유용 종합 호(weekly, 그 주 매일 판 + 사용자 제보). 옛 화 · 목 호(trends · skills)는 일정에서 뺐다.
 
   python3 trend.py collect [--date D]       후보 수집 → state/<D>/candidates.json · snapshot.json · weekly.json
-  python3 trend.py generate trends|skills|weekly   수집 → claude -p 작성 → 검증 → 렌더 (03.보고서/<D>-<kind>/)
-  python3 trend.py deliver                  오늘 만든 보고서를 Discord로 보낸다. 없거나 부실하면 실패 알림
+  python3 trend.py generate daily|weekly    수집 → claude -p 작성 → 검증 → 렌더 (03.보고서/<그 주 월요일>-daily/ · <D>-weekly/)
+  python3 trend.py deliver [kind]           오늘 만든 보고서를 Discord로 보낸다. 없거나 부실하거나 kind가 다르면 실패 알림
   python3 trend.py insight [--no-send]      주간 인사이트(연결 · 반대 의견 · 질문) → #인사이트 (토 09:00)
   python3 trend.py poll                     Discord 메시지를 읽고 명령 · 대화를 처리한다 (1분 주기)
   python3 trend.py discord-setup            봇이 든 채널과 내 사용자 ID를 찾아 .env에 적는다
@@ -11,7 +11,7 @@
   python3 trend.py selftest                 급상승 규칙 · 렌더 자기검사
 
 설정은 ~/.config/trend-automation/.env (DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID(#브리핑), DISCORD_INSIGHT_CHANNEL_ID(#인사이트),
-DISCORD_OWNER_ID, HC_URL).
+DISCORD_ADMIN_CHANNEL_ID(#관리, 볼트 작업), DISCORD_OWNER_ID, HC_URL).
 설계: ../01.설계/설계안.md
 """
 import csv
@@ -38,7 +38,7 @@ VAULT = HERE.parent.parent / "Obsidian" / "Second_Brain"
 REPORTS = VAULT / "work" / "trend-automation" / "03.보고서"
 # 브리핑 · 사용자 제보는 외부 정보를 정리한 것이라 볼트 raw-sources로 들어가 위키에 편입된다. 인사이트는 대상이 아니다
 RAW = VAULT / "raw-sources"
-RAW_NAME = {"trends": "트렌드노트", "skills": "스킬도감"}
+RAW_NAME = {"daily": "데일리", "trends": "트렌드노트", "skills": "스킬도감"}
 LINKLY = "https://raw.githubusercontent.com/LinklyAI/best-skills/main/data/latest/"
 MARKETPLACE = "https://raw.githubusercontent.com/anthropics/claude-plugins-official/main/.claude-plugin/marketplace.json"
 CHANGELOG = "https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md"
@@ -350,8 +350,12 @@ def github_releases(since, hot_repos):
 
 def last_edition(kind, before):
     """같은 호의 직전 정기 보고 날짜(주 1회라 5일 이상 앞선 것). 이 날짜 이후에 나온 소식만 새 소식이다.
-    같은 주에 다시 만든 시험본 · rerun은 기준이 되지 않는다."""
-    cut = (dt.date.fromisoformat(before) - dt.timedelta(days=5)).isoformat()
+    같은 주에 다시 만든 시험본 · rerun은 기준이 되지 않는다. 매일 판은 오늘 전 마지막 갱신(또는 옛 화 · 목 호)이 기준이다."""
+    if kind == "daily":
+        ds = sorted([p.name for p in REPORTS.glob("20*-daily/20*-*-*") if p.is_dir() and p.name < before]
+                    + [p.name[:10] for k in ("trends", "skills") for p in REPORTS.glob(f"20*-{k}") if p.name[:10] < before])
+        return ds[-1] if ds else (dt.date.fromisoformat(before) - dt.timedelta(days=7)).isoformat()
+    cut =(dt.date.fromisoformat(before) - dt.timedelta(days=5)).isoformat()
     ds = sorted(p.name[:10] for p in REPORTS.glob(f"20*-{kind}") if p.name[:10] <= cut)
     return ds[-1] if ds else (dt.date.fromisoformat(before) - dt.timedelta(days=7)).isoformat()
 
@@ -418,8 +422,8 @@ def collect(date):
 # ---------- 작성 · 검증 ----------
 
 ENV_FILE = Path.home() / ".config" / "trend-automation" / ".env"
-EDITION = {"trends": "AI 트렌드 노트", "skills": "스킬 도감", "weekly": "트렌드 + AI 종합"}
-MIN_ITEMS = {"trends": 2, "skills": 3, "weekly": 5}
+EDITION = {"daily": "AI 데일리", "trends": "AI 트렌드 노트", "skills": "스킬 도감", "weekly": "트렌드 + AI 종합"}
+MIN_ITEMS = {"daily": 3, "trends": 2, "skills": 3, "weekly": 5}
 WEEKDAY = "월화수목금토일"
 
 
@@ -498,31 +502,38 @@ def direction_text():
     return p.read_text() if p.exists() else "(아직 없음)"
 
 
-def week_edition(kind, date):
-    """이번 주(월요일부터 date까지) 마지막 kind 호의 날짜."""
+def week_editions(date):
+    """이번 주(월요일부터 date까지) 매일 · 화 · 목 호 폴더, 날짜순."""
     d = dt.date.fromisoformat(date)
     mon = (d - dt.timedelta(days=d.weekday())).isoformat()
-    ds = sorted(p.name[:10] for p in REPORTS.glob(f"20*-{kind}") if mon <= p.name[:10] <= date and (p / "items.json").exists())
-    if not ds:
-        raise RuntimeError(f"이번 주 {EDITION[kind]} 호가 없음")
-    return ds[-1]
+    eds = sorted((p for k in ("daily", "trends", "skills") for p in REPORTS.glob(f"20*-{k}")
+                  if mon <= p.name[:10] <= date and (p / "items.json").exists()), key=lambda p: p.name)
+    if not eds:
+        raise RuntimeError(f"이번 주({mon}~) 호가 없음")
+    return eds
+
+
+def week_dir(date):
+    """매일 판 폴더. 한 주에 하나(그 주 월요일 이름)를 금요일 종합 전까지 매일 갱신한다. 토 · 일에 만들면 다음 주 판으로 간다."""
+    d = dt.date.fromisoformat(date) + dt.timedelta(days=2)
+    return REPORTS / f"{(d - dt.timedelta(days=d.weekday())).isoformat()}-daily"
 
 
 def generate(kind):
     date = today()
-    out = REPORTS / f"{date}-{kind}"
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "items.json").unlink(missing_ok=True)  # 지난 결과가 남아 있으면 실패를 성공으로 오인한다
+    out = week_dir(date) if kind == "daily" else REPORTS / f"{date}-{kind}"
+    work = out / date if kind == "daily" else out  # 매일 판은 그날 새 항목을 하위 폴더에 받아 그 주 판에 더한다
+    work.mkdir(parents=True, exist_ok=True)
+    (work / "items.json").unlink(missing_ok=True)  # 지난 결과가 남아 있으면 실패를 성공으로 오인한다
     report = (HERE / "prompt_report.md").read_text()
-    if kind == "weekly":  # 새로 수집하지 않는다. 그 주 화 · 목 호에서 검증을 통과한 항목이 재료다
-        tue, thu = week_edition("trends", date), week_edition("skills", date)
-        got = {k: json.loads((REPORTS / f"{d}-{k}" / "items.json").read_text()) for k, d in (("trends", tue), ("skills", thu))}
+    if kind == "weekly":  # 새로 수집하지 않는다. 그 주 매일 · 화 · 목 호에서 검증을 통과한 항목이 재료다
+        eds = week_editions(date)
+        got = [json.loads((p / "items.json").read_text()) for p in eds]
         cand = out / "candidates.json"
-        save_json(cand, {"trends": [i for i in got["trends"]["trends"] if i["verified"]],
-                         "guides": [i for i in got["trends"]["guides"] if i["verified"]],
-                         "skills": [i for i in got["skills"]["skills"] if i["verified"]], "source_errors": []})
+        save_json(cand, {**{k: [i for g in got for i in g.get(k, []) if i.get("verified")] for k in ("trends", "guides", "skills")},
+                         "source_errors": []})
         report = (HERE / "prompt_weekly.md").read_text().replace("{RULES}", "## 반드시 지킬 것" + report.split("## 반드시 지킬 것", 1)[1])
-        weekly_dir = STATE / thu
+        weekly_dir = max(STATE.glob("20*/weekly.json")).parent
     else:
         cand = collect(date)
         weekly_dir = STATE / date
@@ -536,13 +547,13 @@ def generate(kind):
             ["timeout", "45m", "claude", "-p", prompt, "--setting-sources", "user", "--strict-mcp-config",
              "--allowedTools", "Read,Glob,Grep,WebFetch,WebSearch,Write", "--permission-prompts", "none",
              "--max-turns", "120", "--output-format", "json"],
-            cwd=out, capture_output=True, text=True, stdin=subprocess.DEVNULL)
-        (out / "claude.log").write_text(r.stdout[-20000:] + "\n--- stderr\n" + r.stderr[-5000:])
-        if r.returncode == 0 and (out / "items.json").exists():
+            cwd=work, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        (work / "claude.log").write_text(r.stdout[-20000:] + "\n--- stderr\n" + r.stderr[-5000:])
+        if r.returncode == 0 and (work / "items.json").exists():
             break
     else:
-        raise RuntimeError(f"claude -p 실패 (exit {r.returncode}), 로그: {out / 'claude.log'}")
-    items = json.loads((out / "items.json").read_text())
+        raise RuntimeError(f"claude -p 실패 (exit {r.returncode}), 로그: {work / 'claude.log'}")
+    items = json.loads((work / "items.json").read_text())
     items.setdefault("skills", [])
     items.setdefault("trends", [])
     items.setdefault("guides", [])
@@ -551,22 +562,30 @@ def generate(kind):
         items = drop_stale(items, last_edition(kind, date))
     items = enrich(items, load_json(weekly_dir / "weekly.json", {}))
     items["source_errors"] = json.loads(cand.read_text())["source_errors"]
+    new = items
+    if kind == "daily":  # 오늘 새 항목을 앞에 두고 그 주 판에 더한다. 같은 날 다시 만들면 그날 것만 바꾼다
+        save_json(work / "items.json", new)
+        week = load_json(out / "items.json", {})
+        for k in ("trends", "guides", "skills"):
+            for it in new[k]:
+                it["day"] = date
+        items = {**new, **{k: new[k] + [i for i in week.get(k, []) if i.get("day") != date] for k in ("trends", "guides", "skills")}}
     save_json(out / "items.json", items)
     render(items, kind, date, out)
     reported = load_json(STATE / "reported.json", {})
     covered = load_json(STATE / "covered.json", [])
-    for it in items["skills"]:
+    for it in new["skills"]:
         if it["verified"]:
             if it.get("repo"):
                 reported[it["repo"]] = date
             covered.append(it["name"])
-    covered += [t["title"] for t in items["trends"] + items["guides"] if t["verified"]]
+    covered += [t["title"] for t in new["trends"] + new["guides"] if t["verified"]]
     save_json(STATE / "reported.json", reported)
     save_json(STATE / "covered.json", covered[-200:])
     save_json(STATE / "status.json", {"last_generate": date, "kind": kind, "dir": str(out),
-                                      "items": len(plates(items, kind))})
-    if kind in RAW_NAME:  # 종합 호는 화 · 목 호를 다시 묶은 것이라 raw로 넣지 않는다
-        to_raw(f"AI브리핑_{date}_{RAW_NAME[kind]}.md",
+                                      "items": len(plates(new, kind))})
+    if kind in RAW_NAME:  # 종합 호는 매일 판을 다시 묶은 것이라 raw로 넣지 않는다. 매일 판 raw는 주마다 한 파일(편입 전까지 갱신)
+        to_raw(f"AI브리핑_{out.name[:10]}_{RAW_NAME[kind]}.md",
                re.sub(r"^!\[[^\]]*\]\(chart-\d+\.svg\)\n\n?", "", (out / "report.md").read_text(), flags=re.M))  # 막대 그림은 보고서 폴더에만 있다
     log(f"generate {kind} done → {out}")
 
@@ -587,7 +606,7 @@ def to_raw(name, text, append=False):
     req = HERE / "requests.md"
     line = f"위키 편입: raw-sources/{name}"
     if line not in req.read_text():
-        req.write_text(req.read_text().replace("## 대기\n", f"## 대기\n- [{today()}] {line} — sources 페이지 + 도구맵 · 개념 페이지로 옮기기 + relations.py로 관계 후보 · 대체재 · 상충 제안\n", 1))
+        req.write_text(req.read_text().replace("## 대기\n", f"## 대기\n- [{today()}] {line} — sources 페이지 + 도구맵 · 개념 페이지로 옮기기 + relations.py로 관계 후보 · alternativeTo · disagreesWith 제안\n", 1))
 
 
 def to_raw_report(user_text, reply, channel):
@@ -776,7 +795,7 @@ def build_html(items, kind, title, ps, dropped):
     idx, body, gidx = [], [], []
     for n, p in enumerate(ps, 1):
         name = p.get("name") or p.get("title")
-        if kind == "weekly" and p.get("_s") and not any(b.startswith('<header class="part" id="skills"') for b in body):
+        if kind in ("weekly", "daily") and p.get("_s") and not any(b.startswith('<header class="part" id="skills"') for b in body):
             body.append('<header class="part" id="skills"><h2>이번 주 써 볼 도구</h2><p>팀이 이번 주에 깔아서 덕을 볼 것.</p></header>')
         if p.get("_g") and not gidx:
             body.append('<header class="part" id="guides"><h2>실무 가이드</h2>'
@@ -898,10 +917,12 @@ REPLY = {}  # poll이 지금 답하는 채널. 비어 있으면 #브리핑
 
 
 def channels():
-    """채널 이름 → ID. #브리핑은 보고 · 실패 알림, #인사이트는 인사이트 보고. 둘 다 대화를 받는다."""
+    """채널 이름 → ID. #브리핑은 보고 · 실패 알림, #인사이트는 인사이트 보고, #관리는 볼트 작업. 모두 대화를 받는다."""
     out = {"브리핑": os.environ["DISCORD_CHANNEL_ID"]}
     if os.environ.get("DISCORD_INSIGHT_CHANNEL_ID"):
         out["인사이트"] = os.environ["DISCORD_INSIGHT_CHANNEL_ID"]
+    if os.environ.get("DISCORD_ADMIN_CHANNEL_ID"):
+        out["관리"] = os.environ["DISCORD_ADMIN_CHANNEL_ID"]
     return out
 
 
@@ -932,10 +953,12 @@ def alert(msg):
 
 
 
-def deliver():
+def deliver(want=None):
     s = load_json(STATE / "status.json", {})
     if s.get("last_generate") != today():
         raise RuntimeError(f"오늘({today()}) 생성된 보고서가 없음. 마지막 생성: {s.get('last_generate')}")
+    if want and s["kind"] != want:  # 금요일: 종합 생성이 실패했을 때 07:00 매일 판을 종합 대신 보내지 않는다
+        raise RuntimeError(f"오늘 마지막으로 만든 호가 {EDITION[s['kind']]}라 {EDITION[want]}를 보내지 않음")
     out, kind = Path(s["dir"]), s["kind"]
     items = json.loads((out / "items.json").read_text())
     d = dt.date.fromisoformat(today())
@@ -980,7 +1003,7 @@ def publish(out, kind):
 
 
 HELP = ("말로 하면 됩니다. 방향 · 피드백은 다음 호에 반영하고, 궁금한 건 조사해서 답합니다.\n"
-        "바로 실행하는 명령: `status` · `rerun trends|skills|weekly` · `add-source <RSS URL> <이름>` · `reset`(대화 새로 시작) · `help`")
+        "바로 실행하는 명령: `status` · `rerun daily|weekly` · `add-source <RSS URL> <이름>` · `reset`(대화 새로 시작) · `help`")
 
 
 def poll():
@@ -1000,11 +1023,11 @@ def poll():
             save_json(STATE / "poll.json", seen)
             if m["author"]["id"] != owner:  # 봇 자신과 다른 사람의 메시지는 처리하지 않는다
                 continue
-            handle(m["content"].strip(), name)
+            handle(m["content"].strip(), name, [(a["url"], a["filename"]) for a in m.get("attachments", [])])
     REPLY.clear()
 
 
-def handle(text, channel):
+def handle(text, channel, files=()):
     cmd, _, arg = text.partition(" ")
     cmd, arg = cmd.lower(), arg.strip()
     log(f"poll msg #{channel} {text[:60]}")
@@ -1024,10 +1047,10 @@ def handle(text, channel):
             st.pop(channel, None)
             save_json(STATE / "chat.json", st)
             say(f"#{channel} 대화를 새로 시작합니다. 방향 메모는 그대로 둡니다.")
-        elif cmd == "help" or not text:
+        elif cmd == "help" or not (text or files):
             say(HELP if text else "메시지 본문이 비어 있습니다. 봇 설정에서 Message Content Intent가 켜져 있는지 확인하세요.")
         else:
-            chat(text, channel)
+            chat(text, channel, files)
     except Exception as e:  # noqa: BLE001 — 한 메시지의 실패를 알리고 다음 메시지로
         log(f"ERROR poll {e}")
         say(f"⚠️ 처리 실패: {e}")
@@ -1044,22 +1067,44 @@ NOTES = {"브리핑": "direction.md", "인사이트": "insight_direction.md"}  #
 WRITABLE = [*NOTES.values(), "requests.md"]
 
 
-def chat(text, channel="브리핑"):
-    """대화 한 턴 = 새 claude -p 프로세스 하나. 맥락은 채널마다 --resume으로 잇고, 쓰기는 그 채널의 방향 메모 하나만 허용한다."""
+def attach(files):
+    """Discord 첨부를 state/attachments/에 내려받고 경로 목록을 돌려준다. claude -p가 Read로 이미지를 본다."""
+    d = STATE / "attachments"
+    d.mkdir(parents=True, exist_ok=True)
+    out = []
+    for url, name in files:
+        p = d / f"{dt.datetime.now(KST):%Y%m%d-%H%M%S}-{Path(name).name}"
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=60) as r:
+            p.write_bytes(r.read())
+        out.append(p)
+    return out
+
+
+def chat(text, channel="브리핑", files=()):
+    """대화 한 턴 = 새 claude -p 프로세스 하나. 맥락은 채널마다 --resume으로 잇는다.
+    쓰기는 #브리핑 · #인사이트면 메모 파일만, #관리면 볼트 안 Edit · Write만 허용한다(Bash 없음 — 커밋 · push는 사용자 몫)."""
     discord("POST", f"/channels/{channels()[channel]}/typing")
     state = load_json(STATE / "chat.json", {})
     state = state if "session_id" not in state else {"브리핑": state["session_id"]}
-    note = NOTES[channel]
-    recent = sorted(REPORTS.glob("20*-*/report.md"))[-4:]
-    system = ((HERE / "prompt_chat.md").read_text().replace("{TODAY}", today())
-              .replace("{REPORTS}", "\n".join(f"- {p}" for p in recent) or "(아직 없음)")
-              .replace("{CHANNEL}", channel).replace("{NOTE}", note))
-    cmd = ["timeout", "20m", "claude", "-p", text, "--setting-sources", "user", "--strict-mcp-config", "--append-system-prompt", system,
-           "--allowedTools", "Read,Glob,Grep,WebFetch,WebSearch," + ",".join(f"Edit(./{m})" for m in WRITABLE),
-           "--add-dir", str(REPORTS), "--permission-prompts", "none", "--max-turns", "40", "--output-format", "json"]
+    if paths := attach(files):
+        text += "\n\n첨부 파일(Read로 열어 볼 것):\n" + "\n".join(f"- {p}" for p in paths)
+    if channel == "관리":
+        cwd, system = VAULT, (HERE / "prompt_admin.md").read_text().replace("{TODAY}", today())
+        tools = ["Read,Glob,Grep,WebFetch,WebSearch", f"Edit(/{VAULT}/**)", f"Write(/{VAULT}/**)"]
+    else:
+        note = NOTES[channel]
+        recent = sorted(REPORTS.glob("20*-*/report.md"))[-4:]
+        cwd, system = HERE, ((HERE / "prompt_chat.md").read_text().replace("{TODAY}", today())
+                             .replace("{REPORTS}", "\n".join(f"- {p}" for p in recent) or "(아직 없음)")
+                             .replace("{CHANNEL}", channel).replace("{NOTE}", note))
+        tools = ["Read,Glob,Grep,WebFetch,WebSearch", *(f"Edit(./{m})" for m in WRITABLE)]
+    # 메시지는 stdin으로 넘긴다 — 인자로 넘기면 "-"로 시작하는 글이 옵션으로 읽혀 실패한다
+    cmd = ["timeout", "20m", "claude", "-p", "--setting-sources", "user", "--strict-mcp-config", "--append-system-prompt", system,
+           "--allowedTools", ",".join(tools), "--add-dir", str(REPORTS), str(STATE / "attachments"),
+           "--permission-prompts", "none", "--max-turns", "40", "--output-format", "json"]
     if state.get(channel):
         cmd += ["--resume", state[channel]]
-    r = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, input=text)
     try:
         res = json.loads(r.stdout)
     except json.JSONDecodeError:
@@ -1135,6 +1180,8 @@ def selftest():
     h = build_html(items, "skills", "T", plates(items, "skills"), ["dropped"])
     assert "npx a &lt;b&gt;" in h and "<strong>강조</strong>" in h and 'id="p1"' in h and 'id="p2"' not in h, h
     assert "dropped" in h  # 뺀 항목은 수집 메모에 남는다
+    assert [week_dir(d).name for d in ("2026-11-09", "2026-11-13", "2026-11-14", "2026-11-15")] == \
+        ["2026-11-09-daily", "2026-11-09-daily", "2026-11-16-daily", "2026-11-16-daily"]  # 토 · 일은 다음 주 판
     assert period("2026-10-30") == "10월 다섯째 주" and period("2026-11-03") == "11월 첫째 주" and period("2026-09-28") == "10월 첫째 주"
     items = {"headline": "h", "trends": [{"title": "t", "verified": True, "summary": "s", "so_what": "w", "source_url": "u"}],
              "guides": [{"title": "g", "verified": True, "what": "x", "install": "npx g", "setup": ["a"], "audience": "누구",
@@ -1175,7 +1222,7 @@ if __name__ == "__main__":
         elif cmd == "generate" and sys.argv[2:3] and sys.argv[2] in EDITION:
             generate(sys.argv[2])
         elif cmd == "deliver":
-            deliver()
+            deliver(sys.argv[2] if len(sys.argv) > 2 else None)
         elif cmd == "poll":
             poll()
             (STATE / "poll_fail.json").unlink(missing_ok=True)
